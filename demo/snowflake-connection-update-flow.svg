@@ -1,0 +1,157 @@
+<svg viewBox="0 0 1040 1500" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3a4a5a"/>
+    </marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b3261e"/>
+    </marker>
+    <style>
+      .lbl{fill:#1b2733;font-size:15px;}
+      .sub{fill:#54606c;font-size:12.5px;}
+      .step{fill:#eef4fb;stroke:#2f6fb0;stroke-width:2;}
+      .io{fill:#eaf6ee;stroke:#2f9e5a;stroke-width:2;}
+      .guard{fill:#fff7e6;stroke:#d9a520;stroke-width:2;}
+      .apply{fill:#e9f0fb;stroke:#3a5bd9;stroke-width:2.5;}
+      .refuse{fill:#fdecea;stroke:#b3261e;stroke-width:2;}
+      .refuseTxt{fill:#8a1c16;font-size:12px;}
+      .white{fill:#ffffff;font-weight:600;}
+      .flow{stroke:#3a4a5a;stroke-width:2;fill:none;}
+      .flowRed{stroke:#b3261e;stroke-width:1.8;fill:none;stroke-dasharray:5 4;}
+      .tag{font-size:11px;fill:#54606c;}
+      .mono{font-family:'SF Mono',Consolas,monospace;font-size:11.5px;fill:#33414d;}
+      .hdr{fill:#12324f;font-size:22px;font-weight:700;}
+      .badge{font-size:11px;font-weight:700;}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1040" height="1500" fill="#ffffff"/>
+  <text x="40" y="46" class="hdr">Informatica &#8594; Snowflake connection update</text>
+  <text x="40" y="70" class="sub">Password &#8594; key-pair auth migration via update_connections_from_file (preview &#8594; confirm, replace-style merge)</text>
+
+  <!-- legend -->
+  <g transform="translate(688,30)">
+    <rect x="0" y="0" width="14" height="14" class="io"/><text x="20" y="12" class="tag">input / output</text>
+    <rect x="0" y="20" width="14" height="14" class="step"/><text x="20" y="32" class="tag">action</text>
+    <rect x="120" y="0" width="14" height="14" class="guard"/><text x="140" y="12" class="tag">guard (skippable w/ force)</text>
+    <rect x="120" y="20" width="14" height="14" class="refuse"/><text x="140" y="32" class="tag">refused &#8594; entry skipped</text>
+  </g>
+
+  <!-- 1. plan file -->
+  <rect x="300" y="98" width="440" height="76" rx="10" class="io"/>
+  <text x="520" y="124" text-anchor="middle" class="lbl" font-weight="600">1 &#183; Author plan file on the box</text>
+  <text x="520" y="144" text-anchor="middle" class="mono">~/informatica-mcp/&lt;plan&gt;.json  (never through chat)</text>
+  <text x="520" y="162" text-anchor="middle" class="sub">connections[]: connection_id, expect_name, updates{connParams}, role?</text>
+  <line x1="520" y1="174" x2="520" y2="210" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- 2. preview call -->
+  <rect x="300" y="210" width="440" height="60" rx="10" class="step"/>
+  <text x="520" y="235" text-anchor="middle" class="lbl" font-weight="600">2 &#183; Run tool  (confirm = false)</text>
+  <text x="520" y="255" text-anchor="middle" class="sub">returns a masked PREVIEW &#8212; no writes yet</text>
+  <line x1="520" y1="270" x2="520" y2="300" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- loop banner -->
+  <rect x="70" y="300" width="900" height="890" rx="14" fill="none" stroke="#9fb4c7" stroke-width="1.6" stroke-dasharray="8 6"/>
+  <text x="90" y="322" class="badge" fill="#5a6b7b">FOR EACH connection entry</text>
+
+  <!-- placeholder check -->
+  <rect x="300" y="338" width="440" height="52" rx="10" class="step"/>
+  <text x="520" y="360" text-anchor="middle" class="lbl">Placeholder / empty?  (FILL_ME, no updates)</text>
+  <text x="520" y="378" text-anchor="middle" class="sub">yes &#8594; skipped &#183; no &#8594; continue</text>
+  <line x1="520" y1="390" x2="520" y2="418" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- 3 GET live -->
+  <rect x="300" y="418" width="440" height="56" rx="10" class="step"/>
+  <text x="520" y="441" text-anchor="middle" class="lbl" font-weight="600">3 &#183; GET current connection (live)</text>
+  <text x="520" y="460" text-anchor="middle" class="sub">read connParams: user, authentication, additionalparam</text>
+  <line x1="520" y1="474" x2="520" y2="500" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- refuse column x -->
+  <!-- GUARD A: name -->
+  <polygon points="520,500 720,540 520,580 320,540" class="guard"/>
+  <text x="520" y="536" text-anchor="middle" class="lbl">Name guard</text>
+  <text x="520" y="554" text-anchor="middle" class="sub">actual name == expect_name ?</text>
+  <line x1="520" y1="580" x2="520" y2="606" class="flow" marker-end="url(#arrow)"/>
+  <text x="533" y="598" class="tag">match</text>
+  <!-- refuse A -->
+  <line x1="720" y1="540" x2="812" y2="540" class="flowRed" marker-end="url(#arrowRed)"/>
+  <rect x="812" y="516" width="160" height="48" rx="8" class="refuse"/>
+  <text x="892" y="536" text-anchor="middle" class="refuseTxt" font-weight="700">REFUSED</text>
+  <text x="892" y="552" text-anchor="middle" class="refuseTxt">name mismatch</text>
+
+  <!-- GUARD B: key/user -->
+  <polygon points="520,606 720,650 520,694 320,650" class="guard"/>
+  <text x="520" y="642" text-anchor="middle" class="lbl">Key &#8596; user guard</text>
+  <text x="520" y="660" text-anchor="middle" class="sub">key filename stem == Snowflake user ?</text>
+  <line x1="520" y1="694" x2="520" y2="720" class="flow" marker-end="url(#arrow)"/>
+  <text x="533" y="712" class="tag">match</text>
+  <line x1="720" y1="650" x2="812" y2="650" class="flowRed" marker-end="url(#arrowRed)"/>
+  <rect x="812" y="620" width="160" height="60" rx="8" class="refuse"/>
+  <text x="892" y="642" text-anchor="middle" class="refuseTxt" font-weight="700">REFUSED</text>
+  <text x="892" y="658" text-anchor="middle" class="refuseTxt">key/user mismatch</text>
+  <text x="892" y="672" text-anchor="middle" class="refuseTxt">(force to override)</text>
+
+  <!-- GUARD C: already keypair -->
+  <polygon points="520,720 720,764 520,808 320,764" class="guard"/>
+  <text x="520" y="756" text-anchor="middle" class="lbl">Already KeyPair guard</text>
+  <text x="520" y="774" text-anchor="middle" class="sub">on KeyPair w/ a DIFFERENT key ?</text>
+  <line x1="520" y1="808" x2="520" y2="834" class="flow" marker-end="url(#arrow)"/>
+  <text x="533" y="826" class="tag">no</text>
+  <line x1="720" y1="764" x2="812" y2="764" class="flowRed" marker-end="url(#arrowRed)"/>
+  <rect x="812" y="734" width="160" height="60" rx="8" class="refuse"/>
+  <text x="892" y="756" text-anchor="middle" class="refuseTxt" font-weight="700">REFUSED</text>
+  <text x="892" y="772" text-anchor="middle" class="refuseTxt">deliberate migration</text>
+  <text x="892" y="786" text-anchor="middle" class="refuseTxt">(force to override)</text>
+
+  <!-- 4 role append -->
+  <rect x="300" y="834" width="440" height="86" rx="10" class="step"/>
+  <text x="520" y="858" text-anchor="middle" class="lbl" font-weight="600">4 &#183; Role append (optional)</text>
+  <text x="520" y="878" text-anchor="middle" class="sub">KeyPair hides the role field &#8594; ride it in the JDBC URL</text>
+  <text x="520" y="897" text-anchor="middle" class="mono">additionalparam += "role=&lt;ROLE&gt;"  (read live, idempotent)</text>
+  <text x="520" y="913" text-anchor="middle" class="sub">conflicting role= present &#8594; refused unless force</text>
+  <line x1="520" y1="920" x2="520" y2="948" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- 5 build masked diff -->
+  <rect x="300" y="948" width="440" height="70" rx="10" class="step"/>
+  <text x="520" y="972" text-anchor="middle" class="lbl" font-weight="600">5 &#183; Build per-entry diff</text>
+  <text x="520" y="991" text-anchor="middle" class="sub">current vs proposed &#183; all secret-like values masked</text>
+  <text x="520" y="1009" text-anchor="middle" class="mono">privateKey / password &#8594; &#8226;&#8226;&#8226;&#8226;</text>
+  <line x1="520" y1="1018" x2="520" y2="1046" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- branch preview vs apply -->
+  <polygon points="520,1046 700,1088 520,1130 340,1088" class="guard"/>
+  <text x="520" y="1084" text-anchor="middle" class="lbl">confirm = true ?</text>
+  <text x="520" y="1102" text-anchor="middle" class="sub">the write gate</text>
+
+  <!-- preview out (left/down loop) -->
+  <line x1="340" y1="1088" x2="150" y2="1088" class="flow"/>
+  <line x1="150" y1="1088" x2="150" y2="1152" class="flow" marker-end="url(#arrow)"/>
+  <rect x="70" y="1152" width="160" height="54" rx="10" class="io"/>
+  <text x="150" y="1175" text-anchor="middle" class="lbl">PREVIEW</text>
+  <text x="150" y="1193" text-anchor="middle" class="sub">masked diff only</text>
+  <text x="345" y="1082" class="tag">false</text>
+
+  <!-- apply path down -->
+  <line x1="520" y1="1130" x2="520" y2="1158" class="flow" marker-end="url(#arrow)"/>
+  <text x="533" y="1150" class="tag">true</text>
+
+  <!-- 6 merge apply -->
+  <rect x="300" y="1158" width="440" height="70" rx="10" class="apply"/>
+  <text x="520" y="1182" text-anchor="middle" class="lbl" font-weight="600" fill="#1f2f7a">6 &#183; Apply &#8212; replace-style merge</text>
+  <text x="520" y="1201" text-anchor="middle" class="sub">fetch full object &#183; strip read-only &#183; merge &#183; re-POST</text>
+  <text x="520" y="1219" text-anchor="middle" class="sub">unsent fields reset to defaults &#8212; merge, never partial PUT</text>
+
+  <!-- out of loop to report -->
+  <line x1="520" y1="1228" x2="520" y2="1258" class="flow" marker-end="url(#arrow)"/>
+  <rect x="300" y="1258" width="440" height="64" rx="10" class="io"/>
+  <text x="520" y="1284" text-anchor="middle" class="lbl" font-weight="600">7 &#183; Result report</text>
+  <text x="520" y="1303" text-anchor="middle" class="sub">per entry: updated / refused / skipped (+ UTC timestamp)</text>
+
+  <!-- footnotes -->
+  <text x="40" y="1372" class="sub" font-weight="700">Why the guards exist</text>
+  <text x="40" y="1394" class="mono">&#8226; A key authenticates exactly ONE Snowflake user &#8212; a wrong key silently breaks the connection.</text>
+  <text x="40" y="1414" class="mono">&#8226; Key paths are Windows paths from the Secure Agent box; the stem is matched case-insensitively, exact (no substrings).</text>
+  <text x="40" y="1434" class="mono">&#8226; KeyPair mode hides the connector's role field, so role must travel in connParams.additionalparam (JDBC URL).</text>
+  <text x="40" y="1454" class="mono">&#8226; Plan files &amp; secrets stay on the box; chat only ever sees masked previews.</text>
+  <text x="40" y="1474" class="mono">&#8226; force=true overrides guards B, C and a conflicting role= &#8212; use only when you know better than the guard.</text>
+</svg>

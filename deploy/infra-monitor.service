@@ -1,0 +1,13 @@
+[Unit]
+Description=Informatica 2-hour Slack-digest monitor (single pass)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jbpeck
+WorkingDirectory=/home/jbpeck/informatica-mcp
+ExecStart=/home/jbpeck/informatica-mcp/.venv/bin/python /home/jbpeck/informatica-mcp/monitor.py
+MemoryMax=256M
+CPUQuota=25%
+NoNewPrivileges=true

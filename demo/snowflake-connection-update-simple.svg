@@ -1,0 +1,109 @@
+<svg viewBox="0 0 960 1180" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8aa0b6"/>
+    </marker>
+    <style>
+      .h1{fill:#12324f;font-size:26px;font-weight:800;}
+      .sub{fill:#5a6b7b;font-size:15px;}
+      .n{fill:#ffffff;font-size:22px;font-weight:800;}
+      .t{fill:#16232f;font-size:19px;font-weight:700;}
+      .d{fill:#46545f;font-size:14.5px;}
+      .card{fill:#f4f8fc;stroke:#dbe6f0;stroke-width:1.5;}
+      .flow{stroke:#8aa0b6;stroke-width:2.5;fill:none;}
+      .chip{font-size:13px;fill:#2d6a4f;font-weight:600;}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="1180" fill="#ffffff"/>
+  <text x="60" y="58" class="h1">Updating our Snowflake connections</text>
+  <text x="60" y="86" class="sub">Switching each login from a password to a more secure digital key &#8212; carefully, one at a time.</text>
+
+  <!-- analogy banner -->
+  <rect x="60" y="112" width="840" height="70" rx="14" fill="#eef7f1" stroke="#bfe3cd" stroke-width="1.5"/>
+  <text x="92" y="145" font-size="30">&#128273;</text>
+  <text x="140" y="142" class="t" fill="#1d6b46">Think of it like re-keying a door.</text>
+  <text x="140" y="166" class="d">We're replacing each shared password with a personal key card &#8212; safer, and no password left lying around.</text>
+
+  <!-- step 1 -->
+  <g transform="translate(60,208)">
+    <rect x="0" y="0" width="840" height="118" rx="16" class="card"/>
+    <circle cx="56" cy="59" r="30" fill="#2f6fb0"/>
+    <text x="56" y="67" text-anchor="middle" class="n">1</text>
+    <text x="108" y="46" class="t">Make the list</text>
+    <text x="108" y="72" class="d">We write down which connections to update and keep that list on the secure server &#8212;</text>
+    <text x="108" y="92" class="d">nothing sensitive is ever typed into a chat.</text>
+    <text x="760" y="70" font-size="34" text-anchor="middle">&#128221;</text>
+  </g>
+
+  <!-- step 2 -->
+  <g transform="translate(60,348)">
+    <rect x="0" y="0" width="840" height="118" rx="16" class="card"/>
+    <circle cx="56" cy="59" r="30" fill="#2f6fb0"/>
+    <text x="56" y="67" text-anchor="middle" class="n">2</text>
+    <text x="108" y="46" class="t">Do a dry run first</text>
+    <text x="108" y="72" class="d">We preview exactly what would change for every connection.</text>
+    <text x="108" y="92" class="d">Nothing is actually touched yet &#8212; it's a look-before-you-leap step.</text>
+    <text x="760" y="70" font-size="34" text-anchor="middle">&#128065;</text>
+  </g>
+
+  <!-- step 3 -->
+  <g transform="translate(60,488)">
+    <rect x="0" y="0" width="840" height="196" rx="16" class="card"/>
+    <circle cx="56" cy="59" r="30" fill="#d9a520"/>
+    <text x="56" y="67" text-anchor="middle" class="n">3</text>
+    <text x="108" y="46" class="t">Built-in safety checks</text>
+    <text x="108" y="70" class="d">Before anything changes, each connection has to pass automatic checks. If one looks wrong,</text>
+    <text x="108" y="90" class="d">it's skipped &#8212; not forced through.</text>
+    <g transform="translate(108,108)">
+      <rect x="0" y="0" width="360" height="30" rx="15" fill="#fff7e6" stroke="#e6cf8f"/>
+      <text x="16" y="20" class="chip" fill="#8a6d17">&#10003; Right key for the right account?</text>
+      <rect x="376" y="0" width="330" height="30" rx="15" fill="#fff7e6" stroke="#e6cf8f"/>
+      <text x="392" y="20" class="chip" fill="#8a6d17">&#10003; Already switched? Leave it alone.</text>
+      <rect x="0" y="42" width="500" height="30" rx="15" fill="#fff7e6" stroke="#e6cf8f"/>
+      <text x="16" y="62" class="chip" fill="#8a6d17">&#10003; Keep each person's access level exactly as it was</text>
+    </g>
+  </g>
+
+  <!-- step 4 -->
+  <g transform="translate(60,706)">
+    <rect x="0" y="0" width="840" height="118" rx="16" class="card"/>
+    <circle cx="56" cy="59" r="30" fill="#2f6fb0"/>
+    <text x="56" y="67" text-anchor="middle" class="n">4</text>
+    <text x="108" y="46" class="t">Review the preview</text>
+    <text x="108" y="72" class="d">A person looks over the proposed changes. Passwords and keys are hidden (shown as &#8226;&#8226;&#8226;&#8226;),</text>
+    <text x="108" y="92" class="d">so nothing secret is exposed while reviewing.</text>
+    <text x="760" y="70" font-size="34" text-anchor="middle">&#128269;</text>
+  </g>
+
+  <!-- step 5 -->
+  <g transform="translate(60,846)">
+    <rect x="0" y="0" width="840" height="118" rx="16" class="card"/>
+    <circle cx="56" cy="59" r="30" fill="#3a5bd9"/>
+    <text x="56" y="67" text-anchor="middle" class="n">5</text>
+    <text x="108" y="46" class="t">Give the go-ahead</text>
+    <text x="108" y="72" class="d">Only after approval are the changes applied &#8212; carefully, one connection at a time,</text>
+    <text x="108" y="92" class="d">so nothing else gets disturbed.</text>
+    <text x="760" y="70" font-size="34" text-anchor="middle">&#9989;</text>
+  </g>
+
+  <!-- step 6 -->
+  <g transform="translate(60,986)">
+    <rect x="0" y="0" width="840" height="118" rx="16" class="card"/>
+    <circle cx="56" cy="59" r="30" fill="#2f9e5a"/>
+    <text x="56" y="67" text-anchor="middle" class="n">6</text>
+    <text x="108" y="46" class="t">Get a summary</text>
+    <text x="108" y="72" class="d">A clear report shows what was updated, what was skipped, and when &#8212;</text>
+    <text x="108" y="92" class="d">so there's always a record of what happened.</text>
+    <text x="760" y="70" font-size="34" text-anchor="middle">&#128203;</text>
+  </g>
+
+  <!-- connectors -->
+  <line x1="480" y1="326" x2="480" y2="348" class="flow" marker-end="url(#a)"/>
+  <line x1="480" y1="466" x2="480" y2="488" class="flow" marker-end="url(#a)"/>
+  <line x1="480" y1="684" x2="480" y2="706" class="flow" marker-end="url(#a)"/>
+  <line x1="480" y1="824" x2="480" y2="846" class="flow" marker-end="url(#a)"/>
+  <line x1="480" y1="964" x2="480" y2="986" class="flow" marker-end="url(#a)"/>
+
+  <text x="480" y="1140" text-anchor="middle" class="sub">The golden rule: preview first, a person approves, then apply &#8212; and secrets never leave the secure server.</text>
+</svg>

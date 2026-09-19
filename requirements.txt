@@ -1,0 +1,9 @@
+# Informatica MCP — runtime dependencies
+#
+# mcp MUST stay <2: the code uses the v1 API (from mcp.server.fastmcp import
+# FastMCP). mcp 2.x renamed FastMCP -> MCPServer and a fresh `pip install
+# mcp[cli]` pulls 2.x, which breaks the server on import. Pin prevents that
+# on any venv rebuild (bit the /opt shared install, 2026-09-08).
+mcp[cli]<2
+httpx
+boto3

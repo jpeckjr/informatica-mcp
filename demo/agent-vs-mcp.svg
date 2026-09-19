@@ -1,0 +1,99 @@
+<svg viewBox="0 0 960 620" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <linearGradient id="agentGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="mcpGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="960" height="620" fill="#F8FAFC"/>
+
+  <!-- Title -->
+  <text x="480" y="50" text-anchor="middle" font-size="30" font-weight="700" fill="#0F172A">Agent vs. MCP</text>
+  <text x="480" y="78" text-anchor="middle" font-size="15" fill="#64748B">Two different, complementary building blocks in AI systems</text>
+
+  <!-- Left panel: Agent -->
+  <rect x="40" y="105" width="420" height="430" rx="16" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="2"/>
+  <rect x="40" y="105" width="420" height="64" rx="16" fill="url(#agentGrad)"/>
+  <rect x="40" y="149" width="420" height="20" fill="url(#agentGrad)"/>
+
+  <!-- Agent icon: simple robot head -->
+  <g transform="translate(66,118)">
+    <rect x="0" y="8" width="34" height="26" rx="6" fill="#FFFFFF"/>
+    <circle cx="10" cy="21" r="3.5" fill="#1D4ED8"/>
+    <circle cx="24" cy="21" r="3.5" fill="#1D4ED8"/>
+    <rect x="14" y="0" width="6" height="8" fill="#FFFFFF"/>
+    <circle cx="17" cy="-2" r="3" fill="#FFFFFF"/>
+  </g>
+
+  <text x="115" y="145" font-size="21" font-weight="700" fill="#FFFFFF">Agent</text>
+
+  <g font-size="14.5" fill="#334155">
+    <text x="64" y="205" font-weight="700" fill="#0F172A">What it is</text>
+    <text x="64" y="228">An autonomous system that plans,</text>
+    <text x="64" y="247">decides, and takes action toward a goal.</text>
+
+    <text x="64" y="285" font-weight="700" fill="#0F172A">How it works</text>
+    <text x="64" y="308">Uses an LLM to reason step-by-step,</text>
+    <text x="64" y="327">choosing what to do next in a loop</text>
+    <text x="64" y="346">until the task is done.</text>
+
+    <text x="64" y="384" font-weight="700" fill="#0F172A">Key traits</text>
+    <text x="64" y="407">• Goal-directed, often multi-step</text>
+    <text x="64" y="428">• Maintains memory/state across a task</text>
+    <text x="64" y="449">• Can call tools, but reasoning is its core</text>
+
+    <text x="64" y="487" font-weight="700" fill="#0F172A">Example</text>
+    <text x="64" y="510">A coding assistant that reads a bug</text>
+    <text x="64" y="529">report, edits files, runs tests, and</text>
+    <text x="64" y="548">iterates until the fix works.</text>
+  </g>
+
+  <!-- Right panel: MCP -->
+  <rect x="500" y="105" width="420" height="430" rx="16" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="2"/>
+  <rect x="500" y="105" width="420" height="64" rx="16" fill="url(#mcpGrad)"/>
+  <rect x="500" y="149" width="420" height="20" fill="url(#mcpGrad)"/>
+
+  <!-- MCP icon: simple plug/connector -->
+  <g transform="translate(526,118)">
+    <rect x="4" y="6" width="10" height="16" rx="2" fill="#FFFFFF"/>
+    <rect x="20" y="6" width="10" height="16" rx="2" fill="#FFFFFF"/>
+    <rect x="0" y="20" width="34" height="10" rx="4" fill="#FFFFFF"/>
+    <rect x="12" y="30" width="10" height="10" fill="#FFFFFF"/>
+  </g>
+
+  <text x="575" y="145" font-size="21" font-weight="700" fill="#FFFFFF">MCP</text>
+  <text x="622" y="145" font-size="13" fill="#EDE9FE">(Model Context Protocol)</text>
+
+  <g font-size="14.5" fill="#334155">
+    <text x="524" y="205" font-weight="700" fill="#0F172A">What it is</text>
+    <text x="524" y="228">An open protocol/standard — not an</text>
+    <text x="524" y="247">autonomous system itself.</text>
+
+    <text x="524" y="285" font-weight="700" fill="#0F172A">How it works</text>
+    <text x="524" y="308">Defines a common client-server way</text>
+    <text x="524" y="327">for models to discover and call tools,</text>
+    <text x="524" y="346">data sources, and context.</text>
+
+    <text x="524" y="384" font-weight="700" fill="#0F172A">Key traits</text>
+    <text x="524" y="407">• Interoperability layer, not a "decider"</text>
+    <text x="524" y="428">• Standardizes how tools/data are exposed</text>
+    <text x="524" y="449">• Reusable across many apps and agents</text>
+
+    <text x="524" y="487" font-weight="700" fill="#0F172A">Example</text>
+    <text x="524" y="510">An MCP server that exposes a Slack</text>
+    <text x="524" y="529">or database connection so any MCP-</text>
+    <text x="524" y="548">compatible client can use it.</text>
+  </g>
+
+  <!-- Bottom takeaway -->
+  <rect x="40" y="555" width="880" height="50" rx="10" fill="#0F172A"/>
+  <text x="480" y="586" text-anchor="middle" font-size="14.5" fill="#F1F5F9">
+    In short: an <tspan font-weight="700" fill="#93C5FD">Agent</tspan> decides what to do — <tspan font-weight="700" fill="#C4B5FD">MCP</tspan> is how it connects to the tools and data it needs to do it.
+  </text>
+</svg>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Informatica Slack-digest monitor every 2 hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2h
+Persistent=true
+Unit=infra-monitor.service
+
+[Install]
+WantedBy=timers.target

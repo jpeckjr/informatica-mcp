@@ -1,0 +1,91 @@
+<svg viewBox="0 0 880 640" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, -apple-system, sans-serif">
+  <title>Informatica MCP order of operation</title>
+  <desc>Four-step flow: v3 discovery for context, v2 activity layer for run and task ids, v3 lookup to bridge back to taskflows, then confirm-gated write tools. Side notes explain which ids work where.</desc>
+  <defs>
+    <marker id="oa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#777"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="880" height="640" fill="#ffffff"/>
+
+  <text x="440" y="30" text-anchor="middle" font-size="17" font-weight="600" fill="#1a1a1a">Informatica MCP — order of operation</text>
+  <text x="440" y="50" text-anchor="middle" font-size="12" fill="#777">every user request walks down this ladder; ids only flow the ways the arrows show</text>
+
+  <circle cx="60" cy="105" r="14" fill="#f5f4f0" stroke="#ccc"/>
+  <text x="60" y="110" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1a">1</text>
+  <rect x="90" y="75" width="330" height="62" rx="8" fill="#f5f4f0" stroke="#ccc"/>
+  <text x="105" y="99" font-size="13" font-weight="600" fill="#1a1a1a">Discover — what is being asked about?</text>
+  <text x="105" y="117" font-size="10.5" fill="#777">v3: search-objects (type / path / tag filters)</text>
+  <text x="460" y="97" font-size="10.5" fill="#777">CONTEXT ONLY — v3 federated ids</text>
+  <text x="460" y="111" font-size="10.5" fill="#777">never work on v2 endpoints</text>
+
+  <line x1="255" y1="137" x2="255" y2="167" stroke="#777" stroke-width="1.5" marker-end="url(#oa)"/>
+
+  <circle cx="60" cy="215" r="14" fill="#f5f4f0" stroke="#ccc"/>
+  <text x="60" y="220" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1a">2</text>
+  <rect x="90" y="172" width="330" height="88" rx="8" fill="#f5f4f0" stroke="#ccc"/>
+  <text x="105" y="196" font-size="13" font-weight="600" fill="#1a1a1a">Activity layer — get the real ids</text>
+  <text x="105" y="214" font-size="10.5" fill="#777">v2: list-running-jobs (running MTTs)</text>
+  <text x="105" y="229" font-size="10.5" fill="#777">v2: get-activity-log / find-failed-runs (completed)</text>
+  <text x="105" y="244" font-size="10.5" fill="#777">v2: get-mapping-task-status (one run + error summary)</text>
+  <text x="460" y="200" font-size="10.5" fill="#777">ALL v2 run ids and task ids come</text>
+  <text x="460" y="214" font-size="10.5" fill="#777">from HERE (runId, objectId).</text>
+  <text x="460" y="232" font-size="10.5" fill="#777">Use startTimeUtc, never startTime.</text>
+
+  <line x1="255" y1="260" x2="255" y2="290" stroke="#777" stroke-width="1.5" marker-end="url(#oa)"/>
+
+  <circle cx="60" cy="340" r="14" fill="#f5f4f0" stroke="#ccc"/>
+  <text x="60" y="345" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1a">3</text>
+  <rect x="90" y="295" width="330" height="90" rx="8" fill="#f5f4f0" stroke="#ccc"/>
+  <text x="105" y="319" font-size="13" font-weight="600" fill="#1a1a1a">Bridge back — connect runs to assets</text>
+  <text x="105" y="337" font-size="10.5" fill="#777">v3: lookup-taskflow-for-run (parentTaskFederatedId</text>
+  <text x="105" y="351" font-size="10.5" fill="#777">&#8594; parent taskflow name = its api name ~99%)</text>
+  <text x="105" y="368" font-size="10.5" fill="#777">v3: get-asset-dependencies (Uses / usedBy)</text>
+  <text x="460" y="325" font-size="10.5" fill="#777">References carry appContextId —</text>
+  <text x="460" y="339" font-size="10.5" fill="#777">the ONE v3 field that IS valid on</text>
+  <text x="460" y="353" font-size="10.5" fill="#777">v2 endpoints (task/job calls).</text>
+
+  <line x1="255" y1="385" x2="255" y2="415" stroke="#c15f3c" stroke-width="1.5" marker-end="url(#oa)"/>
+
+  <circle cx="60" cy="470" r="14" fill="#f5f4f0" stroke="#c15f3c" stroke-width="1.5"/>
+  <text x="60" y="475" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1a">4</text>
+  <rect x="90" y="420" width="330" height="100" rx="8" fill="#f5f4f0" stroke="#c15f3c" stroke-width="1.5"/>
+  <text x="105" y="444" font-size="13" font-weight="600" fill="#1a1a1a">Act — confirm-gated writes</text>
+  <text x="105" y="462" font-size="10.5" fill="#777">run-mapping-task · run-taskflow-by-name · resume</text>
+  <text x="105" y="477" font-size="10.5" fill="#777">update-connection(s) — file-driven, masked secrets</text>
+  <text x="105" y="492" font-size="10.5" fill="#777">stop-running-job (destructive)</text>
+  <text x="105" y="509" font-size="10.5" fill="#c15f3c">preview first &#8594; human confirm &#8594; apply</text>
+  <text x="460" y="450" font-size="10.5" fill="#777">Guards: expect-name match,</text>
+  <text x="460" y="464" font-size="10.5" fill="#777">key/user stem check, already-</text>
+  <text x="460" y="478" font-size="10.5" fill="#777">KeyPair protection, role-conflict</text>
+  <text x="460" y="492" font-size="10.5" fill="#777">refusal — force=true to override.</text>
+
+  <line x1="700" y1="75" x2="700" y2="520" stroke="#ccc" stroke-dasharray="4 4"/>
+  <text x="716" y="100" font-size="11" font-weight="600" fill="#1a1a1a">ID RULES</text>
+  <text x="716" y="122" font-size="10.5" fill="#777">v3 federated id</text>
+  <text x="716" y="136" font-size="10.5" fill="#777">&#8594; v3 only (context)</text>
+  <text x="716" y="162" font-size="10.5" fill="#777">v2 runId / objectId</text>
+  <text x="716" y="176" font-size="10.5" fill="#777">&#8594; all v2 actions</text>
+  <text x="716" y="202" font-size="10.5" fill="#777">parentTaskFederatedId</text>
+  <text x="716" y="216" font-size="10.5" fill="#777">&#8594; v3 lookup bridge</text>
+  <text x="716" y="242" font-size="10.5" fill="#777">appContextId</text>
+  <text x="716" y="256" font-size="10.5" fill="#777">&#8594; v3 result, v2-valid</text>
+  <text x="716" y="282" font-size="10.5" fill="#777">taskflow runId (large</text>
+  <text x="716" y="296" font-size="10.5" fill="#777">numeric) &#8594; /active-bpel</text>
+  <text x="716" y="330" font-size="11" font-weight="600" fill="#1a1a1a">SESSIONS</text>
+  <text x="716" y="350" font-size="10.5" fill="#777">v3 + v2 logins share one</text>
+  <text x="716" y="364" font-size="10.5" fill="#777">session id; org chosen by</text>
+  <text x="716" y="378" font-size="10.5" fill="#777">credential (dev vs prod).</text>
+  <text x="716" y="404" font-size="11" font-weight="600" fill="#1a1a1a">VERIFY</text>
+  <text x="716" y="424" font-size="10.5" fill="#777">preview-target-data with</text>
+  <text x="716" y="438" font-size="10.5" fill="#777">DB/SCHEMA/TABLE = read-only</text>
+  <text x="716" y="452" font-size="10.5" fill="#777">auth smoke test; the 2-hour</text>
+  <text x="716" y="466" font-size="10.5" fill="#777">Slack monitor catches what</text>
+  <text x="716" y="480" font-size="10.5" fill="#777">slips through.</text>
+
+  <line x1="90" y1="565" x2="120" y2="565" stroke="#777" stroke-width="1.5"/>
+  <text x="126" y="569" font-size="10.5" fill="#777">read-only steps (1–3): safe to run freely</text>
+  <line x1="390" y1="565" x2="420" y2="565" stroke="#c15f3c" stroke-width="1.5"/>
+  <text x="426" y="569" font-size="10.5" fill="#777">write step (4): guarded, previewed, confirmed by a human</text>
+  <text x="440" y="600" text-anchor="middle" font-size="10.5" fill="#777">The ladder is skippable downward only — a write is never issued from an id that didn't come through step 2 or the appContextId bridge.</text>
+</svg>
