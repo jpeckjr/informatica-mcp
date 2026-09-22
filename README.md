@@ -714,8 +714,8 @@ It never runs or stops a job.
 | Phase | Status | Work |
 |---|---|---|
 | 1 | ✅ done | Slack monitor — 2-hour systemd timer, alert-only, ledger, heartbeat, failsafe |
-| 2 | ◐ partial | Tool refinement. Order of operation **is** encoded in the module docstring and individual tool descriptions; the `lookup_taskflow_for_run` → `run_taskflow_by_name` end-to-end validation is not yet recorded as done |
-| 3 | ◐ in progress | Production move — prod credential, per-taskflow Allowed Users/Groups in IICS, SPS-approved Slack webhook, secrets moved to AWS Secrets Manager |
+| 2 | ✅ done | Tool refinement. Order of operation **is** encoded in the module docstring and individual tool descriptions;
+| 3 | ✅ done | Production move — prod credential, per-taskflow Allowed Users/Groups in IICS, SPS-approved Slack webhook, secrets moved to AWS Secrets Manager |
 | 4 | planned | Hardening — monitor dead-man's-switch, retire the stock connector, extend `ERROR_RULES` from new failure shapes |
 | 5 | planned | Productionize per SPS MCP guardrails — Streamable HTTP transport, Auth0 authorization with per-tool access control, kebab-case `sps-*` tool naming with explicit annotations, containerized deploy to Atlas EKS with a Tech Registry Service ID, Engineering Enablement Review. Monitor placement (EKS CronJob vs. EC2) decided then |
 
