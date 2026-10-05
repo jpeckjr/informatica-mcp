@@ -35,6 +35,7 @@ snowflake_connparams.csv
 
 # ── Monitor runtime state (not source) ───────────────────────────────
 monitor_state.json
+weekly_digest_state.json
 failures.jsonl
 audit.log
 

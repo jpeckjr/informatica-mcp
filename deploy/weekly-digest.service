@@ -1,0 +1,16 @@
+[Unit]
+Description=IDMC weekly failure digest (posts once per completed week)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jbpeck
+# Same working dir as infra-monitor.service: the digest reads the monitor's
+# STATE_FILE (default ./monitor_state.json, relative to the cwd) for the
+# weekly run counts, and the ledger next to the code.
+WorkingDirectory=/home/jbpeck/informatica-mcp
+ExecStart=/home/jbpeck/informatica-mcp/.venv/bin/python /home/jbpeck/informatica-mcp/weekly_digest.py
+MemoryMax=256M
+CPUQuota=25%
+NoNewPrivileges=true

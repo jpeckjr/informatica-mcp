@@ -214,6 +214,32 @@ PY'
 Per-user override for dev (optional, power users): `~/.informatica-mcp-dev.env`.
 Dev never reads `~/.informatica-mcp.env` or the prod `.env`, and vice versa.
 
+### Weekly failure digest (`weekly_digest.py`)
+
+Posts a weekly summary of the previous Mon–Sun (Central) to its own channel:
+totals with week-over-week trend and failure rate, jobs that are new to
+failing, the top 10 failing jobs, and failures by cause. It reads only the
+monitor's ledger and state, and makes no IICS calls. Prod only.
+
+1. Create the channel, then add an incoming webhook for it in the same Slack
+   app as the monitor (api.slack.com/apps → app → Incoming Webhooks).
+2. Add it to the monitor's env file (`~/informatica-mcp/.env`):
+   `SLACK_WEBHOOK_URL_WEEKLY=...` (or `slack_webhook_url_weekly` in
+   Secrets Manager).
+3. Preview without posting: `.venv/bin/python weekly_digest.py --dry-run`
+4. Install the timer:
+
+```bash
+sudo cp ~/informatica-mcp/deploy/weekly-digest.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now weekly-digest.timer
+systemctl list-timers weekly-digest.timer
+```
+
+The timer fires daily at 08:00 CT and posts only if the last completed week
+hasn't been posted, so Monday is the normal post and later days retry a
+missed one. Failures alert the primary monitor webhook.
+
 ### Optional: share the monitor's failure ledger
 
 ```bash

@@ -161,6 +161,18 @@ class AlertTests(unittest.IsolatedAsyncioTestCase):
         for call in self.slack.call_args_list:
             self.assertFalse(call.kwargs.get("include_team", False))
 
+    # ── weekly run counts (the weekly digest's failure-rate denominator) ──
+    async def test_runs_are_counted_per_week(self):
+        _, state, _ = await self._run(
+            make_cfg(), [],
+            [log_entry("a", 1), log_entry("b", 1, run_id="8")],
+            seed_state={"runs_by_week": {"2020-01-06": 7}})
+        weeks = state["runs_by_week"]
+        self.assertEqual(weeks["2020-01-06"], 7)           # history kept
+        self.assertEqual(sum(weeks.values()) - 7, 2)       # both runs counted
+        for key in weeks:                                  # keys are Mondays
+            self.assertEqual(datetime.fromisoformat(key).weekday(), 0)
+
     # ── failures-only posting ────────────────────────────────────────────
     async def test_healthy_pass_posts_nothing(self):
         texts, _, ledger = await self._run(
