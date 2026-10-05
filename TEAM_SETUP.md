@@ -53,6 +53,21 @@ under `mcpServers`:
 Fully restart Claude Desktop (Cmd+Q, reopen). You should see the
 `informatica` tools. Smoke test: ask Claude to run `list_running_jobs`.
 
+**Dev org (optional).** Add a second entry alongside the first:
+
+```jsonc
+"informatica-mcp-dev": {
+  "command": "ssh",
+  "args": ["-T", "idmc-box",
+           "INFORMATICA_MCP_ENV=dev /opt/informatica-mcp/.venv/bin/python /opt/informatica-mcp/mcp_server.py"]
+}
+```
+
+Same tools, pointed at the dev IICS org. Smoke test: ask Claude to run
+`get_org` on `informatica-mcp-dev` and confirm the org name is the dev org.
+If you see `Org guard: credential logged into org ...`, the dev credential on
+the box is wrong — tell Joe; the guard has stopped it from touching prod.
+
 That's the whole setup — the team credential is already on the box.
 
 ## Rules of the road
@@ -132,17 +147,72 @@ the box. (Clear the shared-prod-credential approach with security either way.)
 ### After each code change (append to your usual deploy)
 
 ```bash
-ssh idmc-box 'sudo rsync -a --delete --exclude=".env" --exclude="*.json" \
+ssh -t idmc-box 'sudo rsync -a --delete --exclude=".env*" --exclude="*.json" \
   --exclude="*.csv" --exclude=".venv" --exclude="__pycache__" \
   --exclude="failures.jsonl" --exclude="monitor_state.json" \
-  --exclude="audit.log" \
+  --exclude="audit.log" --exclude=".git" \
   ~/informatica-mcp/ /opt/informatica-mcp/ \
   && sudo chmod -R a+rX /opt/informatica-mcp \
-  && sudo chmod 640 /opt/informatica-mcp/.env'
+  && sudo chmod 640 /opt/informatica-mcp/.env /opt/informatica-mcp/.env.dev'
 ```
 
-(Excludes keep secrets, plan files, inventory CSVs, and monitor state out of
-the world-readable shared copy.)
+(Excludes keep secrets, plan files, inventory CSVs, monitor state and git
+history out of the world-readable shared copy. `-t` lets sudo prompt.)
+
+> **`.env*`, not `.env`.** With `--delete`, any file in `/opt` that isn't in
+> the source and isn't excluded gets removed. `--exclude=".env"` matches only
+> that exact name, so it would delete `/opt/informatica-mcp/.env.dev` and take
+> the dev MCP down on every prod deploy.
+
+### Dev environment (`informatica-mcp-dev`)
+
+Same code in `/opt`, different credential, selected by
+`INFORMATICA_MCP_ENV=dev`. Dev is MCP-only: no monitor, no Slack, no ledger
+(`find_failed_runs` uses the live API). `monitor.py` refuses to run in dev.
+
+One-time:
+
+```bash
+sudo tee /opt/informatica-mcp/.env.dev > /dev/null <<'EOF'
+IDMC_LOGIN_URL=https://dm-us.informaticacloud.com
+IDMC_USERNAME=<dev-team-account>
+IDMC_PASSWORD=<dev-team-password>
+IDMC_ORG=dev
+IDMC_EXPECTED_ORG_ID=<dev-org-id>
+EOF
+sudo chown root:mcpteam /opt/informatica-mcp/.env.dev
+sudo chmod 640 /opt/informatica-mcp/.env.dev
+```
+
+`IDMC_EXPECTED_ORG_ID` is **required** in dev. Prod and dev share a login URL,
+so the credential is the only thing separating them; the guard refuses any
+session that lands outside the dev org. Find the id in IICS Administrator →
+Organization, while logged into the dev org.
+
+Smoke test (should print the dev org's name, not "SPS Commerce Inc" prod):
+
+```bash
+ssh idmc-box 'cd /opt/informatica-mcp && INFORMATICA_MCP_ENV=dev .venv/bin/python - <<"PY"
+import asyncio
+from config import Config
+from idmc_client import IDMCClient
+
+async def main():
+    c = Config.load()
+    print("env:", c.env, "| expected org:", c.expected_org_id)
+    async with IDMCClient(c.login_url, c.username, c.password,
+                          expected_org_id=c.expected_org_id) as cl:
+        o = await cl.get_org()
+        print("logged into:", o.get("orgId"), "|", o.get("name"))
+
+asyncio.run(main())
+PY'
+```
+
+(Your account must be in `mcpteam` to read `.env.dev`.)
+
+Per-user override for dev (optional, power users): `~/.informatica-mcp-dev.env`.
+Dev never reads `~/.informatica-mcp.env` or the prod `.env`, and vice versa.
 
 ### Optional: share the monitor's failure ledger
 

@@ -29,6 +29,11 @@ Tool groups:
                get_target_fields, validate_expression
   Parity:      run_mapping_task                  (was in stock MCP)
   Destructive: stop_running_job                  (gated behind confirm=True)
+
+Environments: the same file serves prod ("informatica-idmc") and dev
+("informatica-mcp-dev"), selected by INFORMATICA_MCP_ENV — see config.py.
+Dev has every tool, but no failure ledger (find_failed_runs uses the live
+API) and an org-id guard that refuses any credential outside the dev org.
 """
 
 from __future__ import annotations
@@ -43,13 +48,23 @@ from config import Config
 from idmc_client import (IDMCClient, IDMCError, elapsed_hours,
                          parse_start_time, summarize_error)
 
-mcp = FastMCP("informatica-idmc")
 _cfg = Config.load()
+
+# Server name per environment. Prod keeps its original name so nothing that
+# already references it changes; dev gets its own so the two can run side by
+# side in Claude Desktop without their tools being confused for each other.
+SERVER_NAMES = {"prod": "informatica-idmc", "dev": "informatica-mcp-dev"}
+mcp = FastMCP(SERVER_NAMES[_cfg.env])
 
 
 async def _client() -> IDMCClient:
-    c = IDMCClient(_cfg.login_url, _cfg.username, _cfg.password)
-    await c.login()
+    c = IDMCClient(_cfg.login_url, _cfg.username, _cfg.password,
+                   expected_org_id=_cfg.expected_org_id)
+    try:
+        await c.login()
+    except Exception:
+        await c.aclose()                 # don't leak the http client on a
+        raise                            # failed login / org-guard refusal
     return c
 
 
@@ -257,6 +272,12 @@ async def find_failed_runs(days_back: int = 7, name_filter: str = "",
     results: list[dict] = []
     seen: set[str] = set()
 
+    # No ledger in this environment (dev has no monitor): always go to the
+    # live API, and say so rather than returning an empty "ledger" result
+    # that reads like "nothing failed".
+    if not _cfg.ledger_file:
+        source = "api"
+
     if source in ("auto", "ledger"):
         for rec in _read_ledger(cutoff, name_filter):
             key = f"{rec.get('task_id')}:{rec.get('run_id')}"
@@ -264,7 +285,7 @@ async def find_failed_runs(days_back: int = 7, name_filter: str = "",
                 seen.add(key)
                 results.append(rec)
 
-    ledger_exists = os.path.exists(_cfg.ledger_file)
+    ledger_exists = bool(_cfg.ledger_file) and os.path.exists(_cfg.ledger_file)
     need_api = source == "api" or (source == "auto" and not ledger_exists)
     if need_api:
         c = await _client()

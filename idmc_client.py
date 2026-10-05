@@ -24,14 +24,82 @@ Host routing (verified against the tested URLs):
                     (baseApiUrl ends in /saas, e.g. na2.../saas)
   - saas=False   -> baseApiUrl without /saas  ONLY the /active-bpel taskflow API
                     (status / resume / run / rt-by-name)
+
+AUTH MODE (session-id -> JWT migration):
+  Informatica deprecated session-based auth in the Oct 2025 release and intends
+  to make JWT the default sometime after the Oct 2026 release. Nothing in the
+  v2 org record exposes which mode an org is on (checked 2026-10-05 against
+  org 001KVB — no auth-type field), so this client DETECTS the mode from the
+  token's own shape: a JWT is three dot-separated base64 segments carrying an
+  `exp` claim; a session id is one opaque string.
+
+  On that basis the client:
+    - refreshes proactively before `exp` (JWT only; no-op pre-JWT),
+    - re-runs whichever login established the session (v2 vs v3),
+    - reports auth-mode transitions via `auth_mode_changed` so the monitor can
+      announce the flip the first time it happens.
+
+  NOTE: the v2/v3 session interchangeability documented above was verified
+  PRE-JWT. It is an observation with an expiry date, not an invariant —
+  re-verify once this org issues JWTs.
 """
 
 from __future__ import annotations
 
+import base64
+import json
+import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+
+log = logging.getLogger(__name__)
+
+
+def _jwt_claims(token: str) -> dict | None:
+    """Decode a JWT's claims, or None when `token` isn't a JWT at all.
+
+    The signature is deliberately NOT verified: this reads OUR OWN token to
+    decide when to refresh it and which auth mode the org is on. Both are
+    scheduling decisions, not authorization ones — the server remains the
+    only authority on whether a token is valid.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None                                    # opaque IICS session id
+    try:
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)           # restore b64 padding
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return claims if isinstance(claims, dict) else None
+    except Exception:                                  # noqa: BLE001
+        return None                                    # malformed -> treat as opaque
+
+
+def looks_like_jwt(token: str) -> bool:
+    """True when the org issued a JWT rather than an opaque session id.
+
+    Deliberately independent of `exp`: a JWT that carries no expiry is still
+    a JWT, and misreporting the org's auth mode would be worse than losing
+    proactive refresh for it.
+    """
+    return _jwt_claims(token) is not None
+
+
+def jwt_expiry(token: str) -> float | None:
+    """Unix expiry from a JWT's `exp` claim. None when `token` is not a JWT,
+    or is one that carries no `exp` (refresh proactively only when we know
+    when to)."""
+    claims = _jwt_claims(token)
+    if not claims:
+        return None
+    exp = claims.get("exp")
+    try:
+        return float(exp) if exp is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 class IDMCError(Exception):
@@ -45,13 +113,41 @@ TASK_TYPES = {"DMASK", "DRS", "DSS", "MTT", "PCS"}
 
 
 class IDMCClient:
-    def __init__(self, login_url, username, password, timeout=30.0):
+    # Refresh this many seconds BEFORE a JWT's exp, so a request never leaves
+    # with a token that expires in flight.
+    _REFRESH_SKEW_SECONDS = 60
+
+    def __init__(self, login_url, username, password, timeout=30.0,
+                 known_auth_mode: str | None = None,
+                 expected_org_id: str = ""):
+        """known_auth_mode: the auth mode seen on a PREVIOUS run ("jwt" or
+        "session-id"), so a transition can be detected across processes. Pass
+        None when there's no prior observation — the mode is then simply
+        recorded, not reported as a change.
+
+        expected_org_id: when set, every login verifies the credential landed
+        in THIS org and raises otherwise (see _verify_org)."""
+        self._expected_org_id = (expected_org_id or "").strip()
         self._login_url = login_url.rstrip("/")
         self._username = username
         self._password = password
         self._session_id: str | None = None
         self._base_url: str | None = None
         self._http = httpx.AsyncClient(timeout=timeout)
+
+        # Which login established the current session, so a re-auth re-runs
+        # the SAME one. Swapping v2 -> v3 mid-session relies on the
+        # interchangeability noted in the module docstring, which is exactly
+        # the assumption the JWT migration may invalidate.
+        self._login_mode = "v3"
+
+        # Auth-mode observation (see looks_like_jwt / jwt_expiry).
+        self._exp: float | None = None          # None => no usable expiry
+        self._is_jwt = False
+        self.auth_mode: str | None = known_auth_mode
+        self.auth_mode_changed = False
+        self.token_len = 0
+        self.token_ttl_seconds: float | None = None
 
     async def aclose(self):
         await self._http.aclose()
@@ -81,6 +177,9 @@ class IDMCClient:
         self._base_url = (base or "").rstrip("/")
         if not self._session_id or not self._base_url:
             raise IDMCError(f"Login response missing sessionId/baseApiUrl: {data}")
+        self._login_mode = "v3"
+        self._observe_token()
+        await self._verify_org((data.get("userInfo") or {}).get("orgId"))
 
     async def login_v2(self):
         """v2 login (`/ma/api/v2/user/login`) -> returns the full v2 user
@@ -101,7 +200,88 @@ class IDMCClient:
             self._base_url = server_url
         if not self._session_id or not self._base_url:
             raise IDMCError(f"v2 login response missing icSessionId/serverUrl: {data}")
+        self._login_mode = "v2"
+        self._observe_token()
+        await self._verify_org(data.get("orgId"))
         return data
+
+    async def _verify_org(self, reported_org_id: str | None) -> None:
+        """Refuse to proceed if the credential logged into the wrong org.
+
+        Prod and dev share one login URL, so the credential alone decides
+        which org a session lands in. Without this check, a prod credential
+        pasted into the dev env file produces a "dev" MCP that is really
+        prod — with run/stop/update tools live.
+
+        Uses the org id from the login response when present; otherwise asks
+        /api/v2/org (verified to return `orgId`). Calls httpx directly, not
+        _request, so a 401 here can't recurse back into login. Fails CLOSED:
+        if the org can't be determined, the session is discarded.
+        """
+        if not self._expected_org_id:
+            return
+        # One org, two id formats: v3 login reports the 22-char form (the
+        # org record's `orgUUID`, e.g. 8SLNtK67j8QcUupifUj9e2) while v2 login
+        # and /api/v2/org report the short `orgId` (e.g. 001K5P). Verified
+        # live 2026-10-05 against the dev org. Accept a match on EITHER form,
+        # so the guard works regardless of which login ran or which form the
+        # env file holds.
+        ids = {reported_org_id} if reported_org_id else set()
+        if self._expected_org_id not in ids:
+            try:
+                r = await self._http.get(self._url("/api/v2/org"),
+                                         headers=self._headers())
+                if r.status_code == 200:
+                    body = r.json() or {}
+                    ids |= {body.get("orgId"), body.get("id"),
+                            body.get("orgUUID")}
+            except Exception:                          # noqa: BLE001
+                pass                                   # fail closed below
+        ids.discard(None)
+        ids.discard("")
+        if self._expected_org_id not in ids:
+            self._session_id = None                    # never reuse it
+            self._exp = None
+            seen = ", ".join(sorted(ids)) or "<unknown>"
+            raise IDMCError(
+                f"Org guard: credential logged into org {seen}, expected "
+                f"{self._expected_org_id}. Refusing to continue — check which "
+                f"credential is in this environment's env file.",
+                status_code=None)
+
+    def _observe_token(self) -> None:
+        """Record the shape of the token we were just issued, and flag the
+        FIRST time the org's auth mode changes.
+
+        This is the whole JWT early-warning system: no announcement to watch
+        for and no setting to poll — the token itself says which mode the org
+        is on, the moment the first login after a flip returns.
+        """
+        token = self._session_id or ""
+        is_jwt = looks_like_jwt(token)
+        self._exp = jwt_expiry(token)          # may be None even for a JWT
+        self._is_jwt = is_jwt
+        mode = "jwt" if is_jwt else "session-id"
+        self.token_len = len(token)
+        self.token_ttl_seconds = (self._exp - time.time()) if self._exp else None
+
+        # First observation ever (auth_mode is None) is not a "change" — we
+        # had nothing to compare against.
+        if self.auth_mode is not None and mode != self.auth_mode:
+            self.auth_mode_changed = True
+            log.warning(
+                "IDMC auth mode changed: %s -> %s (token %d chars%s)",
+                self.auth_mode, mode, self.token_len,
+                f", TTL {self.token_ttl_seconds / 60:.0f} min"
+                if self.token_ttl_seconds else "")
+        self.auth_mode = mode
+
+    async def _reauth(self) -> None:
+        """Re-establish the session using whichever login created it."""
+        if self._login_mode == "v2":
+            await self.login_v2()
+        else:
+            await self.login()
 
     async def get_v2_user_details(self):
         """Fetch the caller's v2 user record (roles, usergroups, serverUrl...)
@@ -109,13 +289,28 @@ class IDMCClient:
         return await self.login_v2()
 
     async def logout(self):
-        """End the session (v2 logout)."""
+        """End the session (v2 logout).
+
+        CAVEAT under JWT: JSON web tokens are stateless, so there is no
+        server-side session for this to end — once the org flips to JWT this
+        call stops meaningfully revoking anything and the token simply remains
+        valid until `exp`. Do not rely on it for credential hygiene; rely on
+        short token TTLs instead. (Nothing currently calls this.)
+        """
         return await self._request("POST", "/api/v2/user/logout")
 
     def _headers(self, accept: str = "application/json"):
         # Session under all three header names: v3 wants INFA-SESSION-ID,
         # v2 wants icSessionId, and the ingestion/replication family
         # (/mftsaas) wants IDS-SESSION-ID. Endpoints ignore the extras.
+        #
+        # TODO (JWT): this shotgun is cheap today (~22-char session id) but
+        # costs ~6.2KB once tokens are JWTs — measured: a 2075-char token
+        # x3 headers = 6225 bytes, against an 8KB default header limit on
+        # nginx and many ALBs. Route ONE header per path family instead.
+        # Blocked on verifying which header /active-bpel and /dbmi actually
+        # require — they have only ever been exercised with all three set.
+        # Probe before changing; a wrong guess here breaks taskflow control.
         return {
             "INFA-SESSION-ID": self._session_id or "",
             "icSessionId": self._session_id or "",
@@ -146,13 +341,26 @@ class IDMCClient:
 
     async def _request(self, method, path, *, accept="application/json",
                        saas=True, raw=False, url_override=None, **kw) -> Any:
-        if not self._session_id:
-            await self.login()
+        # PROACTIVE refresh: a JWT carries a fixed expiry, so refresh just
+        # before it rather than waiting to be rejected. Pre-JWT this is inert
+        # (_exp is None for an opaque session id), so it can ship now.
+        if not self._session_id or (
+                self._exp is not None
+                and time.time() > self._exp - self._REFRESH_SKEW_SECONDS):
+            await self._reauth()
+
         url = url_override or self._url(path, saas=saas)
         r = await self._http.request(method, url, headers=self._headers(accept), **kw)
-        if r.status_code == 401:                  # session expired -> retry once
-            await self.login()
+
+        # REACTIVE retry (once). 401 always means re-auth. 403 is ALSO treated
+        # as possible expiry, but only under JWT — active-bpel and dbmi are
+        # separate services that may reject an expired token with 403 rather
+        # than 401. Pre-JWT the 403 branch never fires, so a genuine
+        # permissions error keeps failing fast exactly as it does today.
+        if r.status_code == 401 or (r.status_code == 403 and self._is_jwt):
+            await self._reauth()
             r = await self._http.request(method, url, headers=self._headers(accept), **kw)
+
         if r.status_code >= 400:
             raise IDMCError(f"{method} {path} -> {r.status_code}: {r.text[:300]}",
                             status_code=r.status_code)
@@ -479,9 +687,11 @@ class IDMCClient:
         the subsequent published versions "name-1", "name-2", etc. This tries
         the exact name first, then name-1 … name-{max_suffix}, stopping at the
         FIRST success. Safe against duplicate runs: a wrong name errors without
-        starting anything, so only a real 2xx kicks off a run. A 403 (not
-        authorized) stops immediately and re-raises (it's an access issue, not a
-        name issue). Returns (response, used_name).
+        starting anything, so only a real 2xx kicks off a run. An AUTH error
+        (401 expired / 403 not authorized) stops immediately and re-raises —
+        otherwise an expired token is misreported as "no such taskflow",
+        sending the operator after the wrong problem. Returns
+        (response, used_name).
 
         TIP: get `name` from lookup_objects(parentTaskFederatedId) — ~99% of
         api names are just the taskflow name.
@@ -494,7 +704,8 @@ class IDMCClient:
                 resp = await self.run_taskflow_by_name(cand)
                 return resp, cand
             except IDMCError as e:
-                if e.status_code == 403 or "not authorized" in str(e).lower():
+                if (e.status_code in (401, 403)
+                        or "not authorized" in str(e).lower()):
                     raise                       # auth problem — don't try other names
                 last_err = e                    # wrong name / not found — try next
         raise IDMCError(

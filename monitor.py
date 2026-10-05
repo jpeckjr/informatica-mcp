@@ -67,6 +67,22 @@ def fmt_ct(dt, fmt: str = "%I:%M %p") -> str:
     return ct(dt).strftime(fmt).lstrip("0") if dt else "?"
 
 
+def week_start_ct(dt: datetime) -> datetime:
+    """Monday 00:00 Central of the calendar week containing `dt`.
+
+    Weeks are fixed Mon 00:00 → next Mon 00:00 CT, so every failure lands in
+    exactly one week and weeks are comparable. Built from the DATE rather
+    than by subtracting hours, so DST weeks (167h / 169h) come out right.
+    """
+    from datetime import time as _time
+    d = ct(dt).date()
+    monday = d - timedelta(days=d.weekday())
+    return datetime.combine(monday, _time(0), tzinfo=CENTRAL)
+
+
+RUNS_BY_WEEK_KEEP = 12   # weeks of completed-run counts kept in state
+
+
 # ── field extraction ───────────────────────────────────────────────────────
 # activityMonitor: name lives in `taskName` (objectName is empty), and the
 # true UTC start is `startTimeUtc` — plain `startTime` carries a misleading
@@ -106,27 +122,40 @@ def save_state(path: str, state: dict) -> None:
 # Routing: primary webhook gets everything (alerts, heartbeat, failsafe);
 # the team webhook (#team-data-platform) gets ONLY failure/long-run alerts
 # so the team channel stays pure signal.
-async def post_to_slack(cfg: Config, text: str,
-                        include_team: bool = False) -> None:
-    """Post via the incoming webhook(s); log-only when none configured."""
-    urls = [u for u in [cfg.slack_webhook_url,
-                        cfg.slack_webhook_url_team if include_team else ""]
-            if u]
+async def post_to_webhooks(urls: list[str], text: str) -> bool:
+    """Post `text` to each webhook URL. Returns True only if EVERY post
+    succeeded (so a caller that must not lose a message — the weekly digest —
+    can tell). Never raises; failures are logged. Log lines never include the
+    URL itself: a webhook URL is a credential."""
+    urls = [u for u in urls if u]
     if not urls:
         log.info("[slack disabled — message follows]\n%s", text)
-        return
+        return False
+    ok = True
     async with httpx.AsyncClient(timeout=15) as http:
         for url in urls:
             try:
                 r = await http.post(url, json={"text": text})
                 if r.status_code >= 400:
-                    # Never let a Slack failure abort the pass; log, move on.
+                    ok = False
                     log.error("Slack post failed (%s): %s",
                               r.status_code, r.text[:200])
                 else:
                     log.info("Posted to Slack (%d chars)", len(text))
             except Exception as e:                 # noqa: BLE001
-                log.error("Slack post failed for one webhook: %s", e)
+                ok = False
+                log.error("Slack post failed for one webhook: %s",
+                          type(e).__name__)
+    return ok
+
+
+async def post_to_slack(cfg: Config, text: str,
+                        include_team: bool = False) -> None:
+    """Post via the incoming webhook(s); log-only when none configured.
+    Never let a Slack failure abort a monitor pass."""
+    await post_to_webhooks(
+        [cfg.slack_webhook_url,
+         cfg.slack_webhook_url_team if include_team else ""], text)
 
 
 # ── data gathering ─────────────────────────────────────────────────────────
@@ -232,6 +261,29 @@ def build_alert(failures: list[dict], parent_paths: dict,
     return "\n".join(parts)
 
 
+def build_auth_mode_notice(client, now: datetime) -> str:
+    """One-time notice that the org's IDMC auth mode flipped.
+
+    Nothing in the v2 org record exposes this setting, so the token's own
+    shape is the only signal available — and since the flip can be made by a
+    PARENT-org admin (001KVB has a parentOrgId), this may be the only warning
+    the team gets. The TTL is the number that matters: it determines whether
+    long paginated pulls can outlive a token.
+    """
+    ttl = client.token_ttl_seconds
+    return (
+        f":key: *IDMC auth mode is now {client.auth_mode.upper()}* — "
+        f"{ct(now).strftime('%Y-%m-%d %I:%M %p').lstrip('0')} CT\n"
+        f"Token: {client.token_len} chars"
+        + (f", TTL {ttl / 60:.0f} min after login.\n" if ttl else ".\n")
+        + "Action: (1) confirm session-header routing — a ~2000-char token "
+          "sent under all three header names is ~6KB and can trip proxy "
+          "header limits; see `_headers` in idmc_client.py. "
+          "(2) Sanity-check that paginated pulls (find_failed_runs, the "
+          "monitor window fetch) survive this TTL."
+    )
+
+
 def build_heartbeat(hb: dict, running_count: int, now: datetime) -> str:
     return (f":white_check_mark: *IDMC monitor heartbeat — "
             f"{ct(now).strftime('%Y-%m-%d %I:%M %p').lstrip('0')} CT*\n"
@@ -252,8 +304,11 @@ async def run_once(cfg: Config) -> None:
     long_run_hours = cfg.cycle_hours * cfg.long_run_cycles
 
     # 120s timeout: activity-log pages are heavy and blew 30s in production.
+    # known_auth_mode seeds the JWT-flip detector from the last pass, so the
+    # transition is reported once rather than on every process start.
     async with IDMCClient(cfg.login_url, cfg.username, cfg.password,
-                          timeout=120.0) as client:
+                          timeout=120.0,
+                          known_auth_mode=state.get("auth_mode")) as client:
         running = await client.list_running_jobs()
         completed = await fetch_completed_window(client, window_start, now)
         failures = [compact_failure(e) for e in completed
@@ -262,6 +317,10 @@ async def run_once(cfg: Config) -> None:
         for f in failures:
             f["parent_taskflow"] = parent_paths.get(
                 f.get("parent_task_federated_id") or "", "")
+        auth_mode_changed = client.auth_mode_changed
+        auth_notice = (build_auth_mode_notice(client, now)
+                       if auth_mode_changed else "")
+        state["auth_mode"] = client.auth_mode
 
     long_runners = [j for j in running
                     if (s := job_start_utc(j)) is not None
@@ -272,6 +331,26 @@ async def run_once(cfg: Config) -> None:
              len(failures), len(running), len(long_runners))
 
     new_failures = ledger_append(cfg, failures, state)
+
+    # Weekly run totals for the weekly digest's failure RATE. The ledger only
+    # holds failures, so the denominator has to be counted here. Each run is
+    # bucketed by its own end time, so a pass straddling midnight Sunday
+    # splits correctly. (On a crashed pass state isn't saved, so a re-covered
+    # window is never double-counted.)
+    weeks = state.get("runs_by_week", {})
+    for e in completed:
+        end = job_end_utc(e)
+        if end:
+            key = week_start_ct(end).date().isoformat()
+            weeks[key] = weeks.get(key, 0) + 1
+    state["runs_by_week"] = dict(sorted(weeks.items())[-RUNS_BY_WEEK_KEEP:])
+
+    # AUTH-MODE FLIP: primary webhook only — housekeeping for whoever owns the
+    # MCP, not signal for the team channel. Posted before the failure alert so
+    # it can't be buried under a noisy window.
+    if auth_mode_changed:
+        log.warning("IDMC auth mode changed to %s", state["auth_mode"])
+        await post_to_slack(cfg, auth_notice)
 
     # ALERT: only when something needs attention. (Alert on all window
     # failures, not just newly-ledgered ones — a re-covered window after a
@@ -306,12 +385,37 @@ async def send_test(cfg: Config) -> None:
                               f"Webhook wiring works."), include_team=True)
 
 
-def main() -> None:
+def configure_logging() -> None:
+    """Set up logging, and keep httpx from logging a live credential.
+
+    SECURITY: httpx logs every request's FULL URL at INFO — which includes
+    the Slack incoming-webhook URL, and that URL *is* the credential (anyone
+    holding it can post to the channel as this monitor). journald on this box
+    is readable by the shared team group, so an INFO-level httpx writes a live
+    credential into a log other people can read.
+
+    Default httpx to WARNING; HTTPX_LOG_LEVEL=INFO re-enables it for
+    debugging. Nothing operational is lost — the monitor's own window and
+    "Posted to Slack" lines carry what matters.
+    """
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    logging.getLogger("httpx").setLevel(
+        os.environ.get("HTTPX_LOG_LEVEL", "WARNING").upper())
+
+
+def main() -> None:
+    configure_logging()
     cfg = Config.load()
+    if cfg.env != "prod":
+        # Dev is MCP-only by design: no Slack, state file or ledger. Refuse
+        # loudly rather than run a half-configured monitor in log-only mode
+        # that looks healthy while watching nothing anyone reads.
+        log.error("monitor.py runs against prod only (INFORMATICA_MCP_ENV=%s)",
+                  cfg.env)
+        sys.exit(2)
     if "--test" in sys.argv:
         asyncio.run(send_test(cfg))
         return
