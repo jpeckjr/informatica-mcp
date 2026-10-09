@@ -268,6 +268,20 @@ duration and `startedBy`.
 | `update_connection(connection_id, updates, confirm)` | **Highest blast radius of the write tools** — every asset on the connection inherits the change immediately. Preview returns a current-vs-proposed diff per field |
 | `update_connections_from_file(file_name, confirm, force)` | Apply a plan file **on the box**, so credentials never pass through chat |
 
+**Asset migration DEV → PROD** (added 2026-10-08; `migration.py` holds the
+testable logic):
+
+| Tool | Org | Notes |
+|---|---|---|
+| `export_assets(asset_ids, include_dependencies=False, name, wait_seconds)` | source (dev) | v3 export → ZIP plus a manifest in `~/informatica-mcp-exports/` (override with `IDMC_EXPORT_DIR`). Changes no assets. By default it exports **only the selected asset(s), without dependencies**, matching the UI with "Include all dependencies" unchecked (team practice). Job name defaults to the UI pattern `<asset name>-<epoch ms>` |
+| `get_export_job(job_id, include_log)` | source | Finish or inspect a long-running export |
+| `list_export_packages()` | either | Packages available to import, from their manifests |
+| `import_package(package, overwrite_ids, keep_persisted_values, confirm)` | target (prod) | **Preview by default (no upload).** Only the exported assets are OVERWRITTEN. Everything else (shared mapping templates, connections, runtime environments, folders) is REUSED: kept if present, created if missing. Prod's persisted in-out values are kept. Refuses to import into the source org, packages outside the export directory, and packages whose checksum no longer matches the manifest |
+| `get_import_job(job_id, include_log)` | target | Per-object import results and the job log |
+
+Both MCPs run as the same Linux user on the box, so a package exported by
+`informatica-mcp-dev` is readable by `informatica-idmc` from the same home directory.
+
 `update_connections_from_file` is worth calling out. It exists because the
 Snowflake password → key-pair migration needed to change credential material
 across dozens of connections, and pasting key paths and passphrases into a chat
@@ -739,6 +753,13 @@ It never runs or stops a job.
   pending cutover (duplicate tool names until then).
 - **`DEPRECATE_send_test_email.py`** is dead code from the retired email-alert
   design and should be deleted.
+- **Migration tools need a first live run.** They are unit-tested
+  (`test_migration.py`) but not yet run against the tenant. To confirm:
+  - the object `type` values the export listing returns for mapping tasks
+    (the MTT flags key on them);
+  - that `exists_in_target` lookups match those types;
+  - how `relaxChecksum` is passed on upload. It is unused by default, since
+    packages are never modified.
 
 ---
 

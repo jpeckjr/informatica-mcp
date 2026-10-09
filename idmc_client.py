@@ -299,7 +299,8 @@ class IDMCClient:
         """
         return await self._request("POST", "/api/v2/user/logout")
 
-    def _headers(self, accept: str = "application/json"):
+    def _headers(self, accept: str = "application/json",
+                 content_type: str | None = "application/json"):
         # Session under all three header names: v3 wants INFA-SESSION-ID,
         # v2 wants icSessionId, and the ingestion/replication family
         # (/mftsaas) wants IDS-SESSION-ID. Endpoints ignore the extras.
@@ -311,13 +312,17 @@ class IDMCClient:
         # Blocked on verifying which header /active-bpel and /dbmi actually
         # require — they have only ever been exercised with all three set.
         # Probe before changing; a wrong guess here breaks taskflow control.
-        return {
+        headers = {
             "INFA-SESSION-ID": self._session_id or "",
             "icSessionId": self._session_id or "",
             "IDS-SESSION-ID": self._session_id or "",
             "Accept": accept,
-            "Content-Type": "application/json",
         }
+        # content_type=None lets httpx set it (multipart uploads need the
+        # generated boundary, which a fixed header would clobber).
+        if content_type:
+            headers["Content-Type"] = content_type
+        return headers
 
     def _url(self, path: str, *, saas: bool = True) -> str:
         """Build a full URL from base_url (which ends in /saas).
@@ -340,7 +345,9 @@ class IDMCClient:
         return f"{scheme}://{first}-ing{dot}{tail}"
 
     async def _request(self, method, path, *, accept="application/json",
-                       saas=True, raw=False, url_override=None, **kw) -> Any:
+                       saas=True, raw=False, url_override=None,
+                       binary=False, content_type="application/json",
+                       **kw) -> Any:
         # PROACTIVE refresh: a JWT carries a fixed expiry, so refresh just
         # before it rather than waiting to be rejected. Pre-JWT this is inert
         # (_exp is None for an opaque session id), so it can ship now.
@@ -350,7 +357,8 @@ class IDMCClient:
             await self._reauth()
 
         url = url_override or self._url(path, saas=saas)
-        r = await self._http.request(method, url, headers=self._headers(accept), **kw)
+        r = await self._http.request(
+            method, url, headers=self._headers(accept, content_type), **kw)
 
         # REACTIVE retry (once). 401 always means re-auth. 403 is ALSO treated
         # as possible expiry, but only under JWT — active-bpel and dbmi are
@@ -359,11 +367,15 @@ class IDMCClient:
         # permissions error keeps failing fast exactly as it does today.
         if r.status_code == 401 or (r.status_code == 403 and self._is_jwt):
             await self._reauth()
-            r = await self._http.request(method, url, headers=self._headers(accept), **kw)
+            r = await self._http.request(
+                method, url, headers=self._headers(accept, content_type), **kw)
 
         if r.status_code >= 400:
             raise IDMCError(f"{method} {path} -> {r.status_code}: {r.text[:300]}",
                             status_code=r.status_code)
+        # binary: return the body bytes (export package ZIP stream).
+        if binary:
+            return r.content
         # raw: return status + text (for endpoints that don't return JSON).
         if raw:
             return {"status_code": r.status_code, "text": r.text}
@@ -803,6 +815,74 @@ class IDMCClient:
     async def stop_job(self, task_id: str, task_type: str = "MTT"):
         body = {"@type": "job", "taskId": task_id, "taskType": task_type}
         return await self._request("POST", "/api/v2/job/stop", json=body)
+
+    # ── asset migration: export / import (v3) ─────────────────────────────
+    # Used to promote assets DEV -> PROD. Export runs in the SOURCE org
+    # session, import in the TARGET org session; the ZIP moves between them
+    # on local disk (see migration.py). Object ids are v3 FEDERATED ids
+    # (search_objects / lookup), which is what these endpoints expect.
+    async def start_export(self, object_ids: list[str],
+                           include_dependencies: bool = True,
+                           name: str | None = None,
+                           include_tags: bool = False):
+        """POST /public/core/v3/export -> export job (id, status.state)."""
+        body = {"objects": [{"id": oid,
+                             "includeDependencies": bool(include_dependencies)}
+                            for oid in object_ids]}
+        if name:
+            body["name"] = name
+        params = {"includeTagInformation": "true"} if include_tags else None
+        return await self._request("POST", "/public/core/v3/export",
+                                   json=body, params=params)
+
+    async def get_export_status(self, job_id: str, expand_objects: bool = True):
+        """GET /public/core/v3/export/{id}[?expand=objects]."""
+        params = {"expand": "objects"} if expand_objects else None
+        return await self._request("GET", f"/public/core/v3/export/{job_id}",
+                                   params=params)
+
+    async def download_export_package(self, job_id: str) -> bytes:
+        """GET /public/core/v3/export/{id}/package -> ZIP bytes."""
+        return await self._request(
+            "GET", f"/public/core/v3/export/{job_id}/package",
+            accept="application/zip", binary=True)
+
+    async def get_export_log(self, job_id: str) -> str:
+        r = await self._request("GET", f"/public/core/v3/export/{job_id}/log",
+                                accept="text/plain", raw=True)
+        return r["text"]
+
+    async def upload_import_package(self, zip_bytes: bytes, file_name: str,
+                                    relax_checksum: bool = False):
+        """POST /public/core/v3/import/package (multipart, part "package").
+        Returns {jobId, jobStatus{state: NOT_STARTED}, checksumValid}.
+        Uploading alone imports nothing; start_import does.
+
+        relaxChecksum is only needed for a MODIFIED package — this workflow
+        never modifies packages, so it is off by default. Sent as a form
+        field; confirm against a live call before relying on it."""
+        files = {"package": (file_name, zip_bytes, "application/zip")}
+        data = {"relaxChecksum": "true"} if relax_checksum else None
+        return await self._request("POST", "/public/core/v3/import/package",
+                                   files=files, data=data, content_type=None)
+
+    async def start_import(self, job_id: str, name: str,
+                           import_specification: dict):
+        """POST /public/core/v3/import/{id} — starts the import job.
+        WRITE action in the TARGET org; caller must confirm-gate."""
+        body = {"name": name, "importSpecification": import_specification}
+        return await self._request("POST", f"/public/core/v3/import/{job_id}",
+                                   json=body)
+
+    async def get_import_status(self, job_id: str, expand_objects: bool = True):
+        params = {"expand": "objects"} if expand_objects else None
+        return await self._request("GET", f"/public/core/v3/import/{job_id}",
+                                   params=params)
+
+    async def get_import_log(self, job_id: str) -> str:
+        r = await self._request("GET", f"/public/core/v3/import/{job_id}/log",
+                                accept="text/plain", raw=True)
+        return r["text"]
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
