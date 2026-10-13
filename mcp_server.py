@@ -1026,5 +1026,375 @@ async def stop_running_job(task_id: str, task_type: str = "MTT",
         await c.aclose()
 
 
+# ── asset migration DEV -> PROD (export / import) ───────────────────────────
+# Flow (two MCPs, one box, one per-user package directory):
+#   1. informatica-mcp-dev  search_objects   -> v3 id of the changed asset(s)
+#   2. informatica-mcp-dev  export_assets    -> ZIP + manifest on disk
+#   3. informatica-idmc     import_package   -> PREVIEW (default): per-object
+#                                               OVERWRITE / REUSE plan
+#   4. informatica-idmc     import_package(confirm=True) after human approval
+#   5. informatica-idmc     get_import_job   -> per-object result + log
+# Safety defaults live in migration.py (only requested assets are
+# overwritten; everything else is reused; prod persisted values kept).
+import asyncio  # noqa: E402
+
+import migration  # noqa: E402
+
+_POLL_SECONDS = 3
+
+
+def _one(resp) -> dict:
+    """Normalise an API response to a single dict.
+
+    First live export (2026-10-09) failed with "'list' object has no
+    attribute 'get'": a v3 migration response arrived as a JSON array where
+    the docs show an object. Accept a one-element list (or a list whose
+    first dict is the job) instead of crashing; anything else is reported
+    with its shape so the next fix is obvious."""
+    if isinstance(resp, dict):
+        return resp
+    if isinstance(resp, list):
+        dicts = [r for r in resp if isinstance(r, dict)]
+        if dicts:
+            return dicts[0]
+    raise IDMCError(f"Unexpected response shape {type(resp).__name__}: "
+                    f"{str(resp)[:500]}")
+
+
+async def _poll(fetch, wait_seconds: int) -> dict:
+    """Poll a job-status coroutine until a terminal state or the deadline.
+    Bounded so a tool call returns before the MCP client times out; callers
+    hand back the job id so a follow-up tool can continue."""
+    deadline = asyncio.get_event_loop().time() + max(0, wait_seconds)
+    while True:
+        status = _one(await fetch())
+        state = ((status or {}).get("status") or {}).get("state")
+        if state in migration.TERMINAL_STATES:
+            return status
+        if asyncio.get_event_loop().time() >= deadline:
+            return status
+        await asyncio.sleep(_POLL_SECONDS)
+
+
+async def _org_identity(c: IDMCClient) -> tuple[str, str]:
+    org = _one(await c.get_org() or {})
+    return (str(org.get("id") or org.get("orgId") or ""),
+            str(org.get("name") or ""))
+
+
+async def _default_export_name(c: IDMCClient, asset_ids: list[str]) -> str:
+    """UI convention: '<asset name>-<epoch ms>' (e.g.
+    mt_stage_salesforce_billing_entity-1791551223622). Falls back to a
+    generic name for multiple assets or if the lookup fails."""
+    epoch_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if len(asset_ids) == 1:
+        try:
+            res = await c.lookup_objects(object_ids=asset_ids)
+            objs = (res.get("objects") if isinstance(res, dict) else res) or []
+            asset_name = (objs[0].get("path") or "").rstrip("/").split("/")[-1]
+            if asset_name:
+                return f"{asset_name}-{epoch_ms}"
+        except (IDMCError, IndexError, AttributeError):
+            pass
+    return f"mcp-export-{epoch_ms}"
+
+
+def _pending_path(job_id: str):
+    return migration.export_dir() / f"pending_{job_id}.json"
+
+
+async def _finish_export(c: IDMCClient, job_id: str, status: dict) -> dict:
+    """Download a SUCCESSFUL export and write its manifest."""
+    pending_file = _pending_path(job_id)
+    pending = (json.loads(pending_file.read_text())
+               if pending_file.is_file() else {})
+    zip_bytes = await c.download_export_package(job_id)
+    zip_name = migration.package_file_name(
+        _cfg.env, status.get("name") or "export", job_id)
+    zip_path = migration.export_dir() / zip_name
+    zip_path.write_bytes(zip_bytes)
+    os.chmod(zip_path, 0o600)
+    org_id, org_name = await _org_identity(c)
+    objects = migration.summarize_objects(status)
+    manifest = migration.build_manifest(
+        env=_cfg.env, org_id=org_id, org_name=org_name, job=status,
+        requested_ids=pending.get("requested_ids") or [],
+        include_dependencies=pending.get("include_dependencies", True),
+        objects=objects, zip_name=zip_name,
+        sha256=migration.sha256_bytes(zip_bytes))
+    migration.write_manifest(zip_path, manifest)
+    if pending_file.is_file():
+        pending_file.unlink()
+    return {"action": "exported", "package": str(zip_path),
+            "bytes": len(zip_bytes), "manifest": manifest}
+
+
+@mcp.tool()
+async def export_assets(asset_ids: list[str], include_dependencies: bool = False,
+                        name: str = "", wait_seconds: int = 40) -> dict:
+    """Export assets from THIS org to a ZIP package on the server's disk.
+    Step 1 of promoting DEV -> PROD (run it on informatica-mcp-dev).
+
+    asset_ids: v3 FEDERATED ids from search_objects (e.g. the MTT id), not
+    v2 task ids.
+
+    include_dependencies=False (default, team practice as of 2026-10-09):
+    the package holds just the selected asset(s), e.g. only the mapping
+    task — the same as the UI export with "Include all dependencies"
+    unchecked. The mapping template, connections and runtime environment
+    must already exist in the target org. Set True only when the target is
+    missing a dependency; import_package still REUSES dependencies rather
+    than overwriting them.
+
+    name: export job name; defaults to the UI convention
+    "<asset name>-<epoch milliseconds>" for a single asset.
+
+    Read-only for this org (an export changes no assets). Waits up to
+    wait_seconds; if the job is still running, returns its job_id — call
+    get_export_job(job_id) to finish and download.
+
+    Returns the package path and a manifest listing every object in it.
+    """
+    if not asset_ids:
+        return {"error": "asset_ids is empty."}
+    c = await _client()
+    stage, job_id, last = "name", None, None
+    try:
+        job_name = name or await _default_export_name(c, asset_ids)
+        stage = "start_export"
+        last = await c.start_export(asset_ids, include_dependencies, job_name)
+        job = _one(last)
+        job_id = job.get("id")
+        _pending_path(job_id).write_text(json.dumps({
+            "requested_ids": asset_ids,
+            "include_dependencies": include_dependencies}))
+        stage = "poll_status"
+        status = await _poll(lambda: c.get_export_status(job_id), wait_seconds)
+        state = (status.get("status") or {}).get("state")
+        if state == "SUCCESSFUL":
+            stage = "download_and_manifest"
+            return await _finish_export(c, job_id, status)
+        return {"action": "export_" + (state or "unknown").lower(),
+                "job_id": job_id, "status": status.get("status"),
+                "objects": migration.summarize_objects(status),
+                "next": ("Call get_export_job(job_id) to continue."
+                         if state not in migration.TERMINAL_STATES else
+                         "Export did not succeed; see get_export_job(job_id, "
+                         "include_log=True).")}
+    except Exception as e:                             # noqa: BLE001
+        # Report WHERE it failed and what came back, so a live-API surprise
+        # is diagnosable from the chat instead of a bare exception string.
+        return {"error": f"{type(e).__name__}: {e}", "stage": stage,
+                "job_id": job_id,
+                "last_response_type": type(last).__name__,
+                "last_response_preview": str(last)[:800] if last is not None else None}
+    finally:
+        await c.aclose()
+
+
+@mcp.tool()
+async def get_export_job(job_id: str, include_log: bool = False,
+                         wait_seconds: int = 0) -> dict:
+    """Status of an export job; downloads the package and writes the
+    manifest once it is SUCCESSFUL (if export_assets has not already)."""
+    c = await _client()
+    try:
+        status = await _poll(lambda: c.get_export_status(job_id), wait_seconds)
+        state = (status.get("status") or {}).get("state")
+        out: dict = {"job_id": job_id, "status": status.get("status"),
+                     "objects": migration.summarize_objects(status)}
+        if state == "SUCCESSFUL":
+            existing = list(migration.export_dir().glob(f"*_{job_id}.zip"))
+            if existing:
+                out["package"] = str(existing[0])
+            else:
+                out.update(await _finish_export(c, job_id, status))
+        if include_log:
+            out["log"] = (await c.get_export_log(job_id))[-8000:]
+        return out
+    finally:
+        await c.aclose()
+
+
+@mcp.tool()
+async def list_export_packages() -> list[dict]:
+    """Packages available to import_package, newest first (from manifests)."""
+    rows = []
+    for zp in sorted(migration.export_dir().glob("*.zip"),
+                     key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            m = migration.read_manifest(zp)
+        except Exception as e:                         # noqa: BLE001
+            rows.append({"package": zp.name, "error": str(e)})
+            continue
+        rows.append({
+            "package": zp.name,
+            "source_env": m.get("source_env"),
+            "source_org": m.get("source_org_name"),
+            "exported_at": m.get("exported_at"),
+            "requested": [o for o in m.get("objects") or []
+                          if o.get("id") in set(m.get("requested_ids") or [])],
+            "object_count": len(m.get("objects") or []),
+        })
+    return rows
+
+
+async def _exists_in_target(c: IDMCClient, obj: dict) -> bool | None:
+    """Best effort: does an object with this name/type/location exist here?"""
+    loc = (obj.get("path") or "").strip("/")
+    typ = obj.get("type") or ""
+    if not (loc and typ and obj.get("name")):
+        return None
+    try:
+        res = await c.search_objects(q=f"type=='{typ}' and location=='{loc}'",
+                                     limit=200)
+    except IDMCError:
+        return None
+    objs = (res.get("objects") if isinstance(res, dict) else res) or []
+    paths = {o.get("path") for o in objs if isinstance(o, dict)}
+    return f"{loc}/{obj['name']}" in paths
+
+
+@mcp.tool()
+async def import_package(package: str, overwrite_ids: list[str] | None = None,
+                         keep_persisted_values: bool = True, name: str = "",
+                         confirm: bool = False, wait_seconds: int = 40,
+                         rollback: bool = False) -> dict:
+    """Import an export package into THIS org. Step 2 of DEV -> PROD (run it
+    on the PROD MCP, informatica-idmc). WRITE action in this org.
+
+    package: file name (or path) from list_export_packages / export_assets.
+    Must be inside the export directory and have its manifest.
+
+    Without confirm=True this returns a PREVIEW and changes nothing (no
+    upload): every object in the package with its planned action —
+      OVERWRITE  only the assets you exported on purpose (manifest
+                 requested_ids), or the ids you pass in overwrite_ids;
+      REUSE      everything else (shared mapping templates, connections,
+                 runtime environments, projects, folders): kept as-is in
+                 this org, created only if missing.
+    keep_persisted_values=True keeps this org's in-out parameter values on
+    overwritten mapping tasks (DEV watermarks never reach PROD).
+
+    rollback=False (promotion, e.g. DEV -> PROD): the package must come from a
+    different org; importing a package back into its own org is refused.
+    rollback=True (restore): the package must come from THIS org — the copy
+    of the PROD task exported before the change (e.g. <TICKET>_rollback_*).
+    Re-importing it overwrites the changed task with that copy. Same preview
+    and confirm steps apply.
+
+    With confirm=True: uploads, starts the import, waits up to wait_seconds,
+    and returns per-object results (or a job_id for get_import_job).
+    """
+    try:
+        zip_path = migration.safe_package_path(package)
+        manifest = migration.read_manifest(zip_path)
+        spec = migration.build_import_specification(
+            manifest, overwrite_ids, keep_persisted_values)
+    except (ValueError, FileNotFoundError) as e:
+        return {"error": str(e)}
+
+    c = await _client()
+    stage, last = "org_identity", None
+    try:
+        org_id, org_name = await _org_identity(c)
+        org_error = migration.check_target_org(manifest, org_id, rollback)
+        if org_error:
+            return {"error": org_error, "target_org": org_name}
+
+        stage = "plan"
+        plan = migration.import_plan(manifest, spec)
+        if not confirm:
+            stage = "exists_in_target"
+            for row in plan:
+                if row["action"] == "OVERWRITE":
+                    row["exists_in_target"] = await _exists_in_target(c, row)
+            return {
+                "action": "preview",
+                "mode": ("ROLLBACK: restore this org's earlier copy"
+                         if rollback else "promotion"),
+                "target_env": _cfg.env,
+                "target_org": org_name,
+                "package": zip_path.name,
+                "source": f"{manifest.get('source_env')} / "
+                          f"{manifest.get('source_org_name')}",
+                "exported_at": manifest.get("exported_at"),
+                "plan": plan,
+                "import_specification": spec,
+                "note": ("Nothing has been uploaded or changed. Review the "
+                         "OVERWRITE rows. exists_in_target is a best-effort "
+                         "search by name/type/location: true = will be "
+                         "overwritten, false = probably created new, "
+                         "null = could not tell. Call again with "
+                         "confirm=true to import."),
+            }
+
+        data = zip_path.read_bytes()
+        if migration.sha256_bytes(data) != manifest.get("sha256"):
+            return {"error": "Package changed since export (checksum "
+                             "mismatch); re-export instead of importing it."}
+        stage = "upload_package"
+        last = await c.upload_import_package(data, zip_path.name)
+        upload = _one(last)
+        job_id = upload.get("jobId")
+        if upload.get("checksumValid") is False:
+            return {"error": "IICS reports an invalid package checksum.",
+                    "upload": upload}
+        prefix = "mcp-rollback" if rollback else "mcp-import"
+        job_name = name or f"{prefix}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+        stage = "start_import"
+        last = await c.start_import(job_id, job_name, spec)
+        stage = "poll_import"
+        status = await _poll(lambda: c.get_import_status(job_id), wait_seconds)
+        return {"action": ("rollback_started" if rollback
+                           else "import_started"), "job_id": job_id,
+                "target_env": _cfg.env, "target_org": org_name,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "status": status.get("status"),
+                "objects": _import_object_rows(status),
+                "next": ("Import still running — call get_import_job(job_id)."
+                         if ((status.get("status") or {}).get("state")
+                             not in migration.TERMINAL_STATES) else
+                         "Verify with search_objects (updateTime) and a test run.")}
+    except Exception as e:                             # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}", "stage": stage,
+                "uploaded": stage in {"start_import", "poll_import"},
+                "last_response_type": type(last).__name__,
+                "last_response_preview": str(last)[:800] if last is not None else None}
+    finally:
+        await c.aclose()
+
+
+def _import_object_rows(status: dict) -> list[dict]:
+    rows = []
+    for o in (status or {}).get("objects") or []:
+        src = o.get("sourceObject") or {}
+        tgt = o.get("targetObject") or {}
+        st = o.get("status") or {}
+        rows.append({"name": src.get("name"), "type": src.get("type"),
+                     "source_path": src.get("path"),
+                     "target_path": tgt.get("path"),
+                     "state": st.get("state"), "message": st.get("message")})
+    return rows
+
+
+@mcp.tool()
+async def get_import_job(job_id: str, include_log: bool = False,
+                         wait_seconds: int = 0) -> dict:
+    """Status of an import job in THIS org, with per-object results
+    (e.g. 'Overwrite existing.' / 'Reuse existing.') and optionally the log."""
+    c = await _client()
+    try:
+        status = await _poll(lambda: c.get_import_status(job_id), wait_seconds)
+        out = {"job_id": job_id, "status": status.get("status"),
+               "objects": _import_object_rows(status)}
+        # (status already normalised by _poll -> _one)
+        if include_log:
+            out["log"] = (await c.get_import_log(job_id))[-8000:]
+        return out
+    finally:
+        await c.aclose()
+
+
 if __name__ == "__main__":
     mcp.run()   # stdio transport — launched by Claude Desktop via the bridge
