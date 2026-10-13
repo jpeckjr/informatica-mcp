@@ -53,7 +53,12 @@ class WeekMathTests(unittest.TestCase):
         self.assertEqual(s.date().isoformat(), THIS_WEEK_KEY)
 
     def test_dst_weeks_are_167_and_169_hours(self):
-        hours = lambda s, e: (e - s) / timedelta(hours=1)
+        # Convert to UTC before subtracting. Python subtracts two datetimes
+        # that share the SAME tzinfo object as naive wall-clock times,
+        # ignoring their offsets — so CT-minus-CT always reports 168h, even
+        # across a DST change. Real elapsed time needs a common frame.
+        utc = lambda d: d.astimezone(timezone.utc)
+        hours = lambda s, e: (utc(e) - utc(s)) / timedelta(hours=1)
         s, e = wd.last_completed_week(U(2026, 11, 2, 14, 0))   # DST ends
         self.assertEqual(hours(s, e), 169)
         s, e = wd.last_completed_week(U(2026, 3, 9, 13, 0))    # DST starts
